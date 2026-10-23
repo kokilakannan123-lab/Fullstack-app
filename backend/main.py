@@ -1,16 +1,30 @@
 
+from pathlib import Path
+
 from fastapi import FastAPI
-# asdas
-app = FastAPI(
-    title="Fullstack Application",
-    description="""
-    ## React Frontend
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-    Backend response: Hello from FastAPI backend!
+app = FastAPI()
 
-    ## Upload File
-
-    Open the Fullstack Application webpage at:
-    http://140.245.237.16:8000/
-    """
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+if STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+@app.get("/api/hello")
+def hello():
+    return {"message": "Hello from FastAPI backend!"}
+
+@app.get("/")
+def home():
+    return FileResponse(STATIC_DIR / "index.html")

@@ -7,12 +7,33 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to Ubuntu Server
+      - name: Checkout GitHub code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t kokila-fullstack:latest .
+
+      - name: Save Docker image
+        run: docker save kokila-fullstack:latest -o fullstack-image.tar
+
+      - name: Copy image to Ubuntu server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "fullstack-image.tar"
+          target: "/tmp/"
+
+      - name: Load image and deploy container
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -20,15 +41,26 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             set -e
-            cd /home/ubuntu/kokila/fullstack-app
-            git fetch origin main
-            git reset --hard origin/main
-            docker build -t kokila-fullstack:latest .
+
+            docker load -i /tmp/fullstack-image.tar
+
             docker rm -f kokila-fullstack-container 2>/dev/null || true
+
             docker run -d \
               --name kokila-fullstack-container \
               --restart unless-stopped \
               -p 8002:8000 \
               kokila-fullstack:latest
-            docker ps --filter name=kokila-fullstack-container
-            curl -fsS http://127.0.0.1:8002/api/hello
+
+            rm -f /tmp/fullstack-image.tar
+
+            for i in $(seq 1 15); do
+              if curl -fsS http://127.0.0.1:8002/api/hello; then
+                echo "Deployment successful"
+                exit 0
+              fi
+              sleep 2
+            done
+
+            docker logs kokila-fullstack-container
+            exit 1
