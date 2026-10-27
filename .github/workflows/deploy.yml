@@ -1,5 +1,4 @@
-
-name: Build and Deploy Fullstack App
+name: Build and Deploy PDF Manager
 
 on:
   push:
@@ -15,29 +14,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout GitHub code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t kokila-fullstack:latest .
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: my-project/package-lock.json
 
-      - name: Save Docker image
+      - name: Build React frontend
+        working-directory: my-project
         run: |
-          docker save kokila-fullstack:latest -o fullstack-image.tar
-          chmod 644 fullstack-image.tar
-          ls -lh fullstack-image.tar
+          npm ci
+          npm run build
 
-      - name: Copy image to Ubuntu server
+      - name: Prepare deployment files
+        run: |
+          mkdir -p deploy/backend
+          mkdir -p deploy/my-project
+          cp backend/main.py deploy/backend/
+          cp backend/requirements.txt deploy/backend/
+          cp -r my-project/dist deploy/my-project/
+
+      - name: Copy files to Ubuntu
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "fullstack-image.tar"
-          target: "/tmp/"
+          source: "deploy/**"
+          target: "/home/ubuntu/pdf-manager"
+          strip_components: 1
           overwrite: true
 
-      - name: Load image and deploy container
+      - name: Install dependencies and restart service
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -46,32 +58,15 @@ jobs:
           script: |
             set -e
 
-            echo "Loading Docker image..."
-            docker load -i /tmp/fullstack-image.tar
+            cd /home/ubuntu/pdf-manager/backend
 
-            echo "Removing previous container if it exists..."
-            docker rm -f kokila-fullstack-container 2>/dev/null || true
+            python3 -m venv .venv
+            .venv/bin/pip install -r requirements.txt
 
-            echo "Starting new container..."
-            docker run -d \
-              --name kokila-fullstack-container \
-              --restart unless-stopped \
-              -p 8002:8000 \
-              kokila-fullstack:latest
+            sudo systemctl daemon-reload
+            sudo systemctl enable pdf-manager
+            sudo systemctl restart pdf-manager
 
-            echo "Removing transferred image file..."
-            rm -f /tmp/fullstack-image.tar
+            sudo systemctl is-active --quiet pdf-manager
 
-            echo "Checking application..."
-            for i in $(seq 1 15); do
-              if curl -fsS http://127.0.0.1:8002/api/hello; then
-                echo ""
-                echo "Deployment successful!"
-                exit 0
-              fi
-              sleep 2
-            done
-
-            echo "Deployment failed. Container logs:"
-            docker logs kokila-fullstack-container
-            exit 1
+            curl -fsS http://127.0.0.1:8000/
