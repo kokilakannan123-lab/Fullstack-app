@@ -2,6 +2,7 @@
 from pathlib import Path
 from uuid import uuid4
 from datetime import datetime, timezone
+import os
 import sqlite3
 import re
 
@@ -30,22 +31,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Project folders
-BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"
-DB_PATH = BASE_DIR / "app.db"
 
-# React production build folder
-FRONTEND_DIST = BASE_DIR.parent / "my-project" / "dist"
+# --------------------------------------------------
+# PROJECT FOLDERS
+# --------------------------------------------------
+
+BASE_DIR = Path(__file__).resolve().parent
+
+# In Docker, PDF_DATA_DIR=/data.
+# Locally, use the backend folder by default.
+DATA_DIR = Path(os.environ.get("PDF_DATA_DIR", str(BASE_DIR)))
+
+UPLOAD_DIR = DATA_DIR / "uploads"
+DB_PATH = DATA_DIR / "app.db"
+
+# Support both Docker and local development.
+FRONTEND_CANDIDATES = [
+    BASE_DIR / "my-project" / "dist",
+    BASE_DIR.parent / "my-project" / "dist",
+]
+
+FRONTEND_DIST = next(
+    (
+        path
+        for path in FRONTEND_CANDIDATES
+        if (path / "index.html").is_file()
+    ),
+    FRONTEND_CANDIDATES[0],
+)
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# --------------------------------------------------
+# PASSWORD HASHING AND LOGIN TOKENS
+# --------------------------------------------------
 
 pwd_context = CryptContext(
     schemes=["bcrypt"],
     deprecated="auto",
 )
 
-# Active tokens are stored in memory.
+# Tokens are kept in memory.
 # Users and PDF records are stored in SQLite.
 active_tokens = {}
 
@@ -158,16 +186,15 @@ def home():
         raise HTTPException(
             status_code=500,
             detail=(
-                "Frontend build not found. Run "
-                "'npm run build' inside the my-project folder."
+                "Frontend build not found. Expected index.html at "
+                f"{index_file}. Build the React app using npm run build."
             ),
         )
 
     return FileResponse(index_file)
 
 
-# Serve Vite-generated JS, CSS, and other assets.
-# Register this only when the build assets directory exists.
+# Serve Vite-generated JavaScript and CSS.
 ASSETS_DIR = FRONTEND_DIST / "assets"
 
 if ASSETS_DIR.is_dir():
@@ -176,6 +203,27 @@ if ASSETS_DIR.is_dir():
         StaticFiles(directory=str(ASSETS_DIR)),
         name="frontend-assets",
     )
+
+
+# Serve files generated at the root of the Vite build.
+@app.get("/favicon.svg")
+def favicon():
+    file_path = FRONTEND_DIST / "favicon.svg"
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Favicon not found.")
+
+    return FileResponse(file_path)
+
+
+@app.get("/icons.svg")
+def icons():
+    file_path = FRONTEND_DIST / "icons.svg"
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Icons not found.")
+
+    return FileResponse(file_path)
 
 
 # --------------------------------------------------
